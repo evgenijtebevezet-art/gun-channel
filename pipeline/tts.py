@@ -122,8 +122,8 @@ def _synthesize_edge(text: str, output_path: str) -> bool:
             "--voice", config.EDGE_TTS_VOICE,
             "--text", text,
             "--write-media", output_path,
-            "--rate", "+5%",  # чуть быстрее для энергичности
-            "--pitch", "-10Hz",  # чуть ниже для авторитетности
+            "--rate=+5%",   # чуть быстрее для энергичности
+            "--pitch=-10Hz", # чуть ниже для авторитетности
         ], capture_output=True, timeout=60, text=True)
 
         if result.returncode == 0 and os.path.exists(output_path):
