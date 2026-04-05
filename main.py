@@ -69,6 +69,7 @@ def run_pipeline():
 
         if not candidates:
             log.error("Нет новых кандидатов. Выход.")
+            notify_error("🤷‍♂️ <b>Поиск завершён без результатов.</b>\nКандидаты не найдены или возникли ошибки API при поиске. Проверь логи GitHub Actions.")
             return
 
         log.info(f"Новых кандидатов: {len(candidates)}")
@@ -83,6 +84,7 @@ def run_pipeline():
 
         if not scored:
             log.error("После скоринга нет кандидатов.")
+            notify_error("🤖 <b>ОШИБКА:</b> После скоринга не осталось кандидатов. Возможно отсеялись по порогу или LLM не вернула результат.")
             return
 
         top = [r for r in scored if r["score"] >= config.MIN_SCORE_THRESHOLD]
@@ -113,8 +115,10 @@ def run_pipeline():
             time.sleep(2)
 
     except Exception as e:
+        import traceback
+        full_trace = traceback.format_exc()
         log.exception(f"Критическая ошибка: {e}")
-        notify_error(str(e))
+        notify_error(f"КРИТИЧЕСКАЯ ОШИБКА:\n{str(e)}\n\nТрейс:\n{full_trace}"[:3000])
         sys.exit(1)
 
     # ── Итог ────────────────────────────────────────────────────────────────
@@ -224,6 +228,7 @@ def _produce_one(
         source=candidate.source,
         index=index,
         total=len(results_summary) + 1,
+        video_path=output_path
     )
 
     results_summary.append({

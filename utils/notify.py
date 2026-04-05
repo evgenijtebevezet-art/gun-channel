@@ -10,9 +10,8 @@ utils/notify.py — Telegram уведомления о готовых видео
 
 import os
 import json
-import urllib.request
-import urllib.parse
 import logging
+import requests
 
 log = logging.getLogger(__name__)
 
@@ -25,25 +24,47 @@ def _send(text: str) -> bool:
         log.debug("Telegram не настроен — пропускаем уведомление")
         return False
     try:
-        payload = json.dumps({
-            "chat_id": TG_CHAT_ID,
-            "text": text,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": False,
-        }).encode()
-        req = urllib.request.Request(
+        resp = requests.post(
             f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage",
-            data=payload,
-            headers={"Content-Type": "application/json"},
+            json={
+                "chat_id": TG_CHAT_ID,
+                "text": text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": False,
+            },
+            timeout=10
         )
-        urllib.request.urlopen(req, timeout=10)
-        return True
+        if resp.status_code != 200:
+            log.warning(f"Telegram TG_BOT API error: {resp.text}")
+        return resp.status_code == 200
     except Exception as e:
         log.warning(f"Telegram send error: {e}")
         return False
 
+def _send_video(video_path: str, caption: str) -> bool:
+    if not TG_BOT_TOKEN or not TG_CHAT_ID:
+        return False
+    if not os.path.exists(video_path):
+        log.warning(f"Видео {video_path} не найдено для отправки в ТГ")
+        return False
+        
+    try:
+        url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendVideo"
+        with open(video_path, 'rb') as f:
+            resp = requests.post(
+                url,
+                data={'chat_id': TG_CHAT_ID, 'caption': caption[:1000]},
+                files={'video': f},
+                timeout=300  # Видео может грузиться долго
+            )
+        if resp.status_code != 200:
+            log.warning(f"Telegram video API error: {resp.text}")
+        return resp.status_code == 200
+    except Exception as e:
+        log.warning(f"Telegram video send error: {e}")
+        return False
 
-def notify_video_ready(title: str, yt_url: str | None, score: float, source: str, index: int, total: int):
+def notify_video_ready(title: str, yt_url: str | None, score: float, source: str, index: int, total: int, video_path: str = None):
     """Уведомление когда видео готово и загружено."""
     status = "✅ Загружено на YouTube" if yt_url else "💾 Сохранено локально (YouTube пропущен)"
     link = f'\n🔗 <a href="{yt_url}">{yt_url}</a>' if yt_url else ""
@@ -56,7 +77,10 @@ def notify_video_ready(title: str, yt_url: str | None, score: float, source: str
         f"━━━━━━━━━━━━━━━━━━\n"
         f"{status}{link}"
     )
-    return _send(msg)
+    _send(msg)
+    
+    if video_path:
+        _send_video(video_path, caption=title[:1000])
 
 
 def notify_pipeline_start(run_number: str = ""):
@@ -98,8 +122,8 @@ def notify_pipeline_done(results: list):
 def notify_error(error_msg: str):
     """Уведомление об ошибке."""
     msg = (
-        f"🚨 <b>Gun Channel — ОШИБКА</b>\n"
+        f"🚨 <b>Gun Channel — ОШИБКА / ИНФО</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"<code>{str(error_msg)[:300]}</code>"
+        f"<code>{str(error_msg)[:3000]}</code>"
     )
     return _send(msg)
