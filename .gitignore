@@ -1,0 +1,17 @@
+# Secrets — НИКОГДА не пушить
+client_secret.json
+token.json
+*.json.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Temp files
+/tmp/
+.env
+.env.*
