@@ -10,6 +10,7 @@ import time
 import random
 import logging
 import requests
+import yt_dlp
 from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import quote_plus
@@ -123,6 +124,52 @@ def search_youtube_cc(max_results: int = 10) -> list[VideoCandidate]:
     return candidates
 
 
+# ─── YouTube Dark (через yt-dlp, без API ключей) ─────────────────────────────
+
+def search_youtube_dark(max_results: int = 10) -> list[VideoCandidate]:
+    """Тёмный парсинг YouTube через yt-dlp. Работает без ключей."""
+    candidates = []
+    queries = random.sample(config.YOUTUBE_SEARCH_QUERIES, min(3, len(config.YOUTUBE_SEARCH_QUERIES)))
+
+    ydl_opts = {
+        'quiet': True,
+        'extract_flat': True,
+        'default_search': 'ytsearch',
+        'age_limit': 18,
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        for query in queries:
+            try:
+                # Ищем короткие милитари видео
+                q = f"ytsearch{max_results // len(queries) + 1}:{query} short"
+                info = ydl.extract_info(q, download=False)
+                
+                for entry in info.get("entries", []):
+                    if not entry:
+                        continue
+                    
+                    duration = entry.get("duration", 0) or 0
+                    if not (config.VIDEO_MIN_DURATION_SEC <= duration <= config.VIDEO_MAX_DURATION_SEC):
+                        continue
+                    
+                    candidates.append(VideoCandidate(
+                        id=f"ytdark_{entry.get('id', '')}",
+                        source="youtube_ytdlp",
+                        url=entry.get("url") or entry.get("webpage_url") or "",
+                        title=entry.get("title", ""),
+                        description=entry.get("description", "")[:500],
+                        duration_sec=duration,
+                        views=entry.get("view_count", 0),
+                        thumbnail_url=entry.get("thumbnail", ""),
+                    ))
+            except Exception as e:
+                log.error(f"yt-dlp dark search error for '{query}': {e}")
+
+    log.info(f"YouTube Dark: найдено {len(candidates)} видео")
+    return candidates
+
+
 # ─── DVIDS (Army public domain) ──────────────────────────────────────────────
 
 def search_dvids(max_results: int = 10) -> list[VideoCandidate]:
@@ -187,9 +234,12 @@ def search_dvids(max_results: int = 10) -> list[VideoCandidate]:
 def search_reddit(max_results: int = 15) -> list[VideoCandidate]:
     """Ищем видеопосты в gun/military сабреддитах через Reddit JSON API."""
     candidates = []
-    headers = {"User-Agent": config.REDDIT_USER_AGENT}
+    # Мимикрируем под обычный браузер (Dark Parsing)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
 
-    # Авторизация если есть ключи
+    # Авторизация если есть ключи, иначе публичный JSON
     token = _get_reddit_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -366,6 +416,7 @@ def search_all(max_total: int = None) -> list[VideoCandidate]:
 
     all_candidates = []
     all_candidates += search_youtube_cc(per_source)
+    all_candidates += search_youtube_dark(per_source)
     all_candidates += search_dvids(per_source)
     all_candidates += search_reddit(per_source)
     all_candidates += search_rumble(per_source)
