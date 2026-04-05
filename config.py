@@ -71,8 +71,13 @@ YOUTUBE_SEARCH_QUERIES = [
 ]
 
 TELEGRAM_CHANNELS = [
-    # добавь свои gun/military каналы
-    # "militarymemes", "gunschannel"
+    "gunsdaily",
+    "combatfootage",
+    "tacticalgear",
+    "militarymemes",
+    "warfootage",
+    "intelslava",
+    "milinfolive"
 ]
 
 # ─── ПАЙПЛАЙН НАСТРОЙКИ ──────────────────────────────────────────────────────
