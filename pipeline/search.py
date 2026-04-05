@@ -43,131 +43,7 @@ class VideoCandidate:
         }
 
 
-# ─── YouTube CC ──────────────────────────────────────────────────────────────
-
-def search_youtube_cc(max_results: int = 10) -> list[VideoCandidate]:
-    """Поиск видео с Creative Commons лицензией через YouTube Data API."""
-    if not config.YOUTUBE_API_KEY:
-        log.warning("YOUTUBE_API_KEY не задан, пропускаем YouTube")
-        return []
-
-    candidates = []
-    queries = random.sample(config.YOUTUBE_SEARCH_QUERIES, min(3, len(config.YOUTUBE_SEARCH_QUERIES)))
-
-    for query in queries:
-        try:
-            resp = requests.get(
-                "https://www.googleapis.com/youtube/v3/search",
-                params={
-                    "part": "snippet",
-                    "q": query,
-                    "type": "video",
-                    "videoLicense": "creativeCommon",
-                    "videoDuration": "short",  # до 4 минут
-                    "maxResults": max_results // len(queries) + 1,
-                    "key": config.YOUTUBE_API_KEY,
-                    "relevanceLanguage": "en",
-                    "regionCode": "US",
-                },
-                timeout=15,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-            video_ids = [i["id"]["videoId"] for i in data.get("items", [])]
-            if not video_ids:
-                continue
-
-            # Получаем длительность через videos.list
-            details_resp = requests.get(
-                "https://www.googleapis.com/youtube/v3/videos",
-                params={
-                    "part": "contentDetails,statistics",
-                    "id": ",".join(video_ids),
-                    "key": config.YOUTUBE_API_KEY,
-                },
-                timeout=15,
-            )
-            details_resp.raise_for_status()
-            details = {v["id"]: v for v in details_resp.json().get("items", [])}
-
-            for item in data.get("items", []):
-                vid_id = item["id"]["videoId"]
-                snippet = item["snippet"]
-                detail = details.get(vid_id, {})
-
-                duration = _parse_iso_duration(
-                    detail.get("contentDetails", {}).get("duration", "PT0S")
-                )
-                if not (config.VIDEO_MIN_DURATION_SEC <= duration <= config.VIDEO_MAX_DURATION_SEC):
-                    continue
-
-                stats = detail.get("statistics", {})
-                candidates.append(VideoCandidate(
-                    id=f"yt_{vid_id}",
-                    source="youtube",
-                    url=f"https://www.youtube.com/watch?v={vid_id}",
-                    title=snippet.get("title", ""),
-                    description=snippet.get("description", "")[:500],
-                    duration_sec=duration,
-                    views=int(stats.get("viewCount", 0)),
-                    thumbnail_url=snippet.get("thumbnails", {}).get("high", {}).get("url", ""),
-                    raw=item,
-                ))
-
-            time.sleep(0.5)
-
-        except Exception as e:
-            log.error(f"YouTube search error for '{query}': {e}")
-
-    log.info(f"YouTube CC: найдено {len(candidates)} видео")
-    return candidates
-
-
-# ─── YouTube Dark (через yt-dlp, без API ключей) ─────────────────────────────
-
-def search_youtube_dark(max_results: int = 10) -> list[VideoCandidate]:
-    """Тёмный парсинг YouTube через yt-dlp. Работает без ключей."""
-    candidates = []
-    queries = random.sample(config.YOUTUBE_SEARCH_QUERIES, min(3, len(config.YOUTUBE_SEARCH_QUERIES)))
-
-    ydl_opts = {
-        'quiet': True,
-        'extract_flat': True,
-        'default_search': 'ytsearch',
-        'age_limit': 18,
-    }
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        for query in queries:
-            try:
-                # Ищем короткие милитари видео
-                q = f"ytsearch{max_results // len(queries) + 1}:{query} short"
-                info = ydl.extract_info(q, download=False)
-                
-                for entry in info.get("entries", []):
-                    if not entry:
-                        continue
-                    
-                    duration = entry.get("duration", 0) or 0
-                    if not (config.VIDEO_MIN_DURATION_SEC <= duration <= config.VIDEO_MAX_DURATION_SEC):
-                        continue
-                    
-                    candidates.append(VideoCandidate(
-                        id=f"ytdark_{entry.get('id', '')}",
-                        source="youtube_ytdlp",
-                        url=entry.get("url") or entry.get("webpage_url") or "",
-                        title=entry.get("title", ""),
-                        description=entry.get("description", "")[:500],
-                        duration_sec=duration,
-                        views=entry.get("view_count", 0),
-                        thumbnail_url=entry.get("thumbnail", ""),
-                    ))
-            except Exception as e:
-                log.error(f"yt-dlp dark search error for '{query}': {e}")
-
-    log.info(f"YouTube Dark: найдено {len(candidates)} видео")
-    return candidates
+from pipeline.sources.youtube import search_youtube
 
 
 # ─── DVIDS (Army public domain) ──────────────────────────────────────────────
@@ -234,15 +110,24 @@ def search_dvids(max_results: int = 10) -> list[VideoCandidate]:
 def search_reddit(max_results: int = 15) -> list[VideoCandidate]:
     """Ищем видеопосты в gun/military сабреддитах через Reddit JSON API."""
     candidates = []
-    # Мимикрируем под обычный браузер (Dark Parsing)
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
+    # Используем реальную браузерную сессию чтобы обойти 403
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer": "https://www.reddit.com/",
+        "sec-ch-ua": '"Google Chrome";v="123", "Not:A-Brand";v="8"',
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+    })
 
     # Авторизация если есть ключи, иначе публичный JSON
     token = _get_reddit_token()
     if token:
-        headers["Authorization"] = f"Bearer {token}"
+        session.headers["Authorization"] = f"Bearer {token}"
         base = "https://oauth.reddit.com"
     else:
         base = "https://www.reddit.com"
@@ -252,10 +137,9 @@ def search_reddit(max_results: int = 15) -> list[VideoCandidate]:
     for sub in subs:
         for sort in ["hot", "top"]:
             try:
-                resp = requests.get(
+                resp = session.get(
                     f"{base}/r/{sub}/{sort}.json",
                     params={"limit": 10, "t": "week"},
-                    headers=headers,
                     timeout=15,
                 )
                 resp.raise_for_status()
@@ -274,7 +158,7 @@ def search_reddit(max_results: int = 15) -> list[VideoCandidate]:
                     if not is_video:
                         continue
 
-                    if p.get("score", 0) < 100:
+                    if p.get("score", 0) < 50:  # снижен порог с 100 до 50
                         continue
 
                     url = p.get("url", "")
@@ -296,7 +180,7 @@ def search_reddit(max_results: int = 15) -> list[VideoCandidate]:
                         raw=p,
                     ))
 
-                time.sleep(1)
+                time.sleep(1.5)
 
             except Exception as e:
                 log.error(f"Reddit r/{sub} error: {e}")
@@ -305,6 +189,52 @@ def search_reddit(max_results: int = 15) -> list[VideoCandidate]:
     return candidates
 
 
+# ─── YouTube CC Каналы (direct channel scraping) ─────────────────────────────
+
+def search_youtube_channels(max_results: int = 10) -> list[VideoCandidate]:
+    """Парсим конкретные CC/военные YouTube каналы напрямую без API."""
+    candidates = []
+    channels = getattr(config, 'YOUTUBE_CC_CHANNELS', [])
+    if not channels:
+        return candidates
+
+    ydl_opts = {
+        'quiet': True,
+        'extract_flat': True,
+        'playlistend': 5,  # последние 5 видео с каждого канала
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        for channel_id in random.sample(channels, min(3, len(channels))):
+            try:
+                url = f"https://www.youtube.com/channel/{channel_id}/videos"
+                info = ydl.extract_info(url, download=False)
+                for entry in (info.get("entries") or []):
+                    if not entry:
+                        continue
+                    duration = entry.get("duration", 0) or 0
+                    if not (config.VIDEO_MIN_DURATION_SEC <= duration <= config.VIDEO_MAX_DURATION_SEC):
+                        continue
+                    candidates.append(VideoCandidate(
+                        id=f"ytchan_{entry.get('id', '')}",
+                        source="youtube_channel",
+                        url=entry.get("url") or entry.get("webpage_url") or f"https://youtu.be/{entry.get('id','')}",
+                        title=entry.get("title", ""),
+                        description=entry.get("description", "")[:500],
+                        duration_sec=duration,
+                        views=entry.get("view_count", 0) or 0,
+                        thumbnail_url=entry.get("thumbnail", ""),
+                    ))
+            except Exception as e:
+                log.error(f"YouTube channel {channel_id} error: {e}")
+
+    log.info(f"YouTube Channels: найдено {len(candidates)} видео")
+    return candidates
+
+
+
+
+# ─── Rumble ──────────────────────────────────────────────────
 # ─── Rumble ──────────────────────────────────────────────────────────────────
 
 def search_rumble(max_results: int = 10) -> list[VideoCandidate]:
@@ -417,6 +347,7 @@ def search_all(max_total: int = None) -> list[VideoCandidate]:
     all_candidates = []
     all_candidates += search_youtube_cc(per_source)
     all_candidates += search_youtube_dark(per_source)
+    all_candidates += search_youtube_channels(per_source)
     all_candidates += search_dvids(per_source)
     all_candidates += search_reddit(per_source)
     all_candidates += search_rumble(per_source)

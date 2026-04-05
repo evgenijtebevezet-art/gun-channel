@@ -396,19 +396,20 @@ def score_candidates(
 # ─── Хелперы ─────────────────────────────────────────────────────────────────
 
 def _download_for_analysis(url: str, output_path: str, max_sec: int = 90) -> bool:
-    """Скачиваем видео через yt-dlp для анализа."""
+    """Скачиваем видео через yt-dlp (Python API) для анализа."""
+    import yt_dlp
     try:
-        result = subprocess.run([
-            "yt-dlp",
-            "--no-warnings",
-            "--quiet",
-            "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best",
-            "--merge-output-format", "mp4",
-            "--match-filter", f"duration <= {max_sec}",
-            "-o", output_path,
-            url,
-        ], capture_output=True, timeout=120, text=True)
-        return result.returncode == 0 and os.path.exists(output_path)
+        ydl_opts = {
+            'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
+            'outtmpl': output_path,
+            'merge_output_format': 'mp4',
+            'quiet': True,
+            'no_warnings': True,
+            'match_filter': yt_dlp.utils.match_filter_func(f"duration <= {max_sec}")
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        return os.path.exists(output_path)
     except Exception as e:
         log.error(f"Download error {url}: {e}")
         return False

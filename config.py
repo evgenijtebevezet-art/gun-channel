@@ -77,7 +77,23 @@ TELEGRAM_CHANNELS = [
     "militarymemes",
     "warfootage",
     "intelslava",
-    "milinfolive"
+    "milinfolive",
+    "military_corner",
+    "war_awareness",
+]
+
+# YouTube каналы с CC лицензией (дали разрешение на повторное использование)
+YOUTUBE_CC_CHANNELS = [
+    # US Military официальные каналы (public domain)
+    "UCbIn3HA5d_QdHABJrNuEpeg",  # US Army
+    "UCkFBGQGIxeF80OXEcWqH-Kg",  # US Marines
+    "UCBcRF18a7Qf58cCRy5xuWwQ",  # US Air Force
+    "UCPnONsW-8L08LFyGJhFiA1g",  # US Navy
+    # Публичные оружейные/тактические каналы
+    "UCa1RLRJ-rBTMN-oFCBgX2aQ",  # Polenar Tactical (CC) 
+    "UC9Ep_SgXzb5Y6eFaSLlMqyg",  # InRange TV (pro-2A CC)
+    "UCFH5Ff0DWOqm3HmlcS8QRZA",  # Kentucky Ballistics
+    "UCMFxd-Yst3rEIEjOFSB_e-w",  # Garand Thumb
 ]
 
 # ─── ПАЙПЛАЙН НАСТРОЙКИ ──────────────────────────────────────────────────────
