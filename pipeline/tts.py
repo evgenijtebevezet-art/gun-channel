@@ -42,23 +42,18 @@ def _synthesize_gemini(text: str, output_path: str) -> bool:
             json={
                 "contents": [{
                     "parts": [{"text": text}],
+                    "role": "user",
                 }],
+                # Gemini API использует camelCase — НЕ snake_case!
                 "generationConfig": {
-                    "response_modalities": ["AUDIO"],
-                    "speech_config": {
-                        "voice_config": {
-                            "prebuilt_voice_config": {
-                                "voice_name": "Charon",  # глубокий мужской голос
+                    "responseModalities": ["AUDIO"],
+                    "speechConfig": {
+                        "voiceConfig": {
+                            "prebuiltVoiceConfig": {
+                                "voiceName": "Charon",  # глубокий мужской голос
                             }
                         },
-                        "audio_config": {
-                            "audio_encoding": "LINEAR16",
-                            "sample_rate_hertz": 24000,
-                        },
                     },
-                },
-                "system_instruction": {
-                    "parts": [{"text": config.TTS_VOICE_PROMPT}],
                 },
             },
             timeout=60,

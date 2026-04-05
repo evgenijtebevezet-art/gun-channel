@@ -109,6 +109,7 @@ def run_pipeline():
                 index=i,
                 results_summary=results_summary,
                 google_token=google_token,
+                score=result.get("score", 0.0),
             )
             if not success:
                 log.error(f"Ролик {i} провалился, продолжаем...")
@@ -133,7 +134,7 @@ def run_pipeline():
 
 def _produce_one(
     candidate, video_path, transcript, analysis,
-    index, results_summary, google_token=None,
+    index, results_summary, google_token=None, score=0.0,
 ) -> bool:
     fail = lambda: results_summary.append(
         {"success": False, "title": "unknown", "yt_url": None}
@@ -162,12 +163,13 @@ def _produce_one(
     audio_dur = get_audio_duration(audio_path)
     log.info(f"  Аудио: {audio_dur:.1f}s")
 
-    # Шаг 5: Скачивание (если нет)
+    # Шаг 5: Скачивание (если нет или файл пропал после скоринга)
     if not video_path or not os.path.exists(video_path):
         log.info("📥 Скачиваем видео...")
         from pipeline.score import _download_for_analysis
         video_path = os.path.join(config.DOWNLOAD_DIR, f"{candidate.id}.mp4")
-        if not _download_for_analysis(candidate.url, video_path):
+        # Используем полный лимит длины, не 90 сек по умолчанию
+        if not _download_for_analysis(candidate.url, video_path, max_sec=config.VIDEO_MAX_DURATION_SEC):
             log.error("Скачивание провалилось")
             results_summary.append({"success": False, "title": script["title_suggestion"], "yt_url": None})
             return False
@@ -224,11 +226,11 @@ def _produce_one(
     notify_video_ready(
         title=script["title_suggestion"],
         yt_url=yt_url,
-        score=result["score"] if "score" in dir() else 0.0,
+        score=score,
         source=candidate.source,
         index=index,
         total=len(results_summary) + 1,
-        video_path=output_path
+        video_path=output_path,
     )
 
     results_summary.append({

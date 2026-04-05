@@ -43,7 +43,7 @@ class VideoCandidate:
         }
 
 
-from pipeline.sources.youtube import search_youtube
+from pipeline.sources.youtube import search_youtube, search_youtube_cc, search_youtube_dark
 
 
 # ─── DVIDS (Army public domain) ──────────────────────────────────────────────
@@ -98,6 +98,11 @@ def search_dvids(max_results: int = 10) -> list[VideoCandidate]:
 
             time.sleep(0.5)
 
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 403:
+                log.warning("DVIDS API: 403 Forbidden — требуется API ключ (api.dvidshub.net/docs). Пропускаем.")
+                break  # Нет смысла повторять другие запросы
+            log.error(f"DVIDS search error: {e}")
         except Exception as e:
             log.error(f"DVIDS search error: {e}")
 
@@ -108,29 +113,22 @@ def search_dvids(max_results: int = 10) -> list[VideoCandidate]:
 # ─── Reddit ──────────────────────────────────────────────────────────────────
 
 def search_reddit(max_results: int = 15) -> list[VideoCandidate]:
-    """Ищем видеопосты в gun/military сабреддитах через Reddit JSON API."""
+    """Ищем видеопосты в gun/military сабреддитах через Reddit OAuth API."""
     candidates = []
-    # Используем реальную браузерную сессию чтобы обойти 403
+
+    # Reddit требует OAuth — без ключей пропускаем, иначе получим 403
+    token = _get_reddit_token()
+    if not token:
+        log.warning("REDDIT_CLIENT_ID/SECRET не заданы или OAuth провалился — пропускаем Reddit")
+        return []
+
     session = requests.Session()
     session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Referer": "https://www.reddit.com/",
-        "sec-ch-ua": '"Google Chrome";v="123", "Not:A-Brand";v="8"',
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-origin",
+        "Authorization": f"Bearer {token}",
+        "User-Agent": f"{config.REDDIT_USER_AGENT}",
+        "Accept": "application/json",
     })
-
-    # Авторизация если есть ключи, иначе публичный JSON
-    token = _get_reddit_token()
-    if token:
-        session.headers["Authorization"] = f"Bearer {token}"
-        base = "https://oauth.reddit.com"
-    else:
-        base = "https://www.reddit.com"
+    base = "https://oauth.reddit.com"
 
     subs = random.sample(config.REDDIT_SUBREDDITS, min(4, len(config.REDDIT_SUBREDDITS)))
 
@@ -284,46 +282,55 @@ def search_rumble(max_results: int = 10) -> list[VideoCandidate]:
 # ─── Odysee ──────────────────────────────────────────────────────────────────
 
 def search_odysee(max_results: int = 10) -> list[VideoCandidate]:
-    """Odysee — децентрализованный хостинг, много gun/military контента."""
+    """Odysee/LBRY — поиск через Lighthouse API (правильный публичный endpoint)."""
     candidates = []
-    queries = ["military", "firearms", "shooting", "2A", "tactical"]
+    queries = ["military weapons", "firearms shooting", "2A guns", "tactical gear"]
 
     for query in random.sample(queries, min(2, len(queries))):
         try:
-            resp = requests.post(
-                "https://api.odysee.com/api/v1/search",
-                json={
-                    "method": "search",
-                    "params": {
-                        "q": query,
-                        "claim_type": "stream",
-                        "media_type": "video",
-                        "limit": max_results // 2,
-                        "order_by": "top",
-                    },
+            # Lighthouse — официальный поисковый бэкенд Odysee
+            resp = requests.get(
+                "https://lighthouse.lbry.com/search",
+                params={
+                    "s": query,
+                    "mediaType": "video",
+                    "nsfw": "false",
+                    "size": max_results // 2,
+                    "from": 0,
+                    "free_only": "true",
                 },
                 timeout=15,
             )
             resp.raise_for_status()
-            data = resp.json()
+            items = resp.json()
 
-            for item in data.get("data", {}).get("documents", []) or []:
-                duration = item.get("value", {}).get("video", {}).get("duration", 0) or 0
-                if duration and not (config.VIDEO_MIN_DURATION_SEC <= duration <= config.VIDEO_MAX_DURATION_SEC):
+            for item in (items if isinstance(items, list) else []):
+                # Строим URL из claim_name + channel
+                name = item.get("name", "")
+                channel = item.get("channel_name") or item.get("channel", "")
+                claim_id = item.get("claimId") or item.get("claim_id", name)
+
+                # Канонический Odysee URL
+                if channel and name:
+                    canonical = f"https://odysee.com/@{channel.lstrip('@')}/{name}"
+                elif name:
+                    canonical = f"https://odysee.com/{name}"
+                else:
                     continue
 
-                claim_id = item.get("claim_id", item.get("name", ""))
-                canonical = item.get("canonical_url", "").replace("lbry://", "https://odysee.com/")
+                duration = item.get("duration", 0) or 0
+                if duration and not (config.VIDEO_MIN_DURATION_SEC <= duration <= config.VIDEO_MAX_DURATION_SEC):
+                    continue
 
                 candidates.append(VideoCandidate(
                     id=f"odysee_{claim_id}",
                     source="odysee",
                     url=canonical,
-                    title=item.get("value", {}).get("title", item.get("name", "")),
-                    description=item.get("value", {}).get("description", "")[:400],
+                    title=item.get("title") or name,
+                    description=(item.get("description") or "")[:400],
                     duration_sec=duration,
-                    views=item.get("meta", {}).get("effective_amount", 0),
-                    thumbnail_url=item.get("value", {}).get("thumbnail", {}).get("url", ""),
+                    views=item.get("view_count", 0) or 0,
+                    thumbnail_url=item.get("thumbnail_url", ""),
                     raw=item,
                 ))
 

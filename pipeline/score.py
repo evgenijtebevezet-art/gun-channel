@@ -201,11 +201,27 @@ def analyze_transcript(transcript: str, title: str) -> dict:
         )
         resp.raise_for_status()
         text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-        # Парсим JSON из ответа
+
+        # Парсим JSON из ответа — убираем markdown-блоки если LLM их добавил
         import re
-        json_match = re.search(r'\{.*\}', text, re.DOTALL)
+        # Убираем ```json ... ``` обёртку
+        text_clean = re.sub(r"```(?:json)?\s*", "", text).replace("```", "").strip()
+        json_match = re.search(r"\{[\s\S]*\}", text_clean)
         if json_match:
-            return json.loads(json_match.group())
+            try:
+                return json.loads(json_match.group())
+            except json.JSONDecodeError:
+                # Пробуем исправить обрезанный JSON
+                snippet = json_match.group()
+                # Закрываем незакрытые скобки
+                open_b = snippet.count("{") - snippet.count("}")
+                if open_b > 0:
+                    snippet += "}" * open_b
+                try:
+                    return json.loads(snippet)
+                except Exception:
+                    pass
+        log.warning(f"Transcript analysis: не удалось распарсить JSON, используем дефолт. Ответ: {text[:200]}")
     except Exception as e:
         log.error(f"Transcript analysis error: {e}")
 
@@ -395,17 +411,28 @@ def score_candidates(
 
 # ─── Хелперы ─────────────────────────────────────────────────────────────────
 
-def _download_for_analysis(url: str, output_path: str, max_sec: int = 90) -> bool:
+def _download_for_analysis(url: str, output_path: str, max_sec: int = None) -> bool:
     """Скачиваем видео через yt-dlp (Python API) для анализа."""
     import yt_dlp
+    # Используем конфиг по умолчанию — не режем на 90с, берём до VIDEO_MAX_DURATION_SEC
+    if max_sec is None:
+        max_sec = config.VIDEO_MAX_DURATION_SEC
+
+    def _match_filter(info, *, incomplete):
+        duration = info.get("duration") or 0
+        if duration and duration > max_sec:
+            return f"Skipping: duration {duration}s > {max_sec}s"
+        return None
+
     try:
         ydl_opts = {
-            'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
-            'outtmpl': output_path,
-            'merge_output_format': 'mp4',
-            'quiet': True,
-            'no_warnings': True,
-            'match_filter': yt_dlp.utils.match_filter_func(f"duration <= {max_sec}")
+            "format": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[ext=mp4]/best",
+            "outtmpl": output_path,
+            "merge_output_format": "mp4",
+            "quiet": True,
+            "no_warnings": True,
+            "match_filter": _match_filter,
+            "socket_timeout": 30,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
